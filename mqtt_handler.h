@@ -2,6 +2,7 @@
 #include <mqtt/async_client.h>
 #include <mongocxx/client.hpp>
 #include <unordered_set>
+#include <memory>
 #include <string>
 #include <fstream>
 #include "config.h"

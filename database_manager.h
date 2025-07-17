@@ -31,6 +31,11 @@ public:
     void process_query_request(mongocxx::client& mongo_client, 
                              mqtt::async_client* mqtt_client, 
                              const json& query);
+
+    // 통계 처리
+    void process_statistics_request(mongocxx::client& mongo_client,
+                                  mqtt::async_client* mqtt_client,
+                                  const json& request);
     
     // 로그 저장
     void save_log_to_mongodb(mongocxx::database& db, 

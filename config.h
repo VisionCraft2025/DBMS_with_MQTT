@@ -40,7 +40,8 @@ public:
     std::string mqtt_topic() const { return get("MQTT_TOPIC", "factory/#"); }
     std::string query_request_topic() const { return get("QUERY_REQUEST_TOPIC", "factory/query/logs/request"); }
     std::string query_response_topic() const { return get("QUERY_RESPONSE_TOPIC", "factory/query/logs/response"); }
-    
+    std::string statistics_request_topic() const { return get("STATISTICS_REQUEST_TOPIC", "factory/statistics"); }
+
     std::string mongo_uri() const { return get("MONGO_URI", "mongodb://localhost:27017"); }
     std::string mongo_db_name() const { return get("MONGO_DB_NAME", "factory_monitoring"); }
     std::string devices_collection() const { return get("DEVICES_COLLECTION", "devices"); }

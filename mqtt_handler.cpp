@@ -19,9 +19,11 @@ void MqttHandler::connected(const std::string& cause) {
     if (mqtt_client) {
         mqtt_client->subscribe(config.mqtt_topic(), 1);
         mqtt_client->subscribe(config.query_request_topic(), 1);
+        mqtt_client->subscribe(config.statistics_request_topic(), 1);
+
         std::cout << "Subscribed to topics: " << config.mqtt_topic() 
-                  << ", " << config.query_request_topic() << std::endl;
-    }
+                  << ", " << config.query_request_topic() 
+                  << ", " << config.statistics_request_topic() << std::endl;    }
 }
 
 void MqttHandler::connection_lost(const std::string& cause) {
@@ -37,6 +39,14 @@ void MqttHandler::message_arrived(mqtt::const_message_ptr msg) {
             json query = json::parse(msg->get_payload_str());
             std::cout << "Processing query request: " << query.value("query_id", "unknown") << std::endl;
             db_manager.process_query_request(mongo_client, mqtt_client, query);
+            return;
+        }
+
+        // 통계 요청 처리
+        if (topic_str == config.statistics_request_topic()) {
+            json request = json::parse(msg->get_payload_str());
+            std::cout << "Processing statistics request for: " << request.value("device_id", "unknown") << std::endl;
+            db_manager.process_statistics_request(mongo_client, mqtt_client, request);
             return;
         }
 
