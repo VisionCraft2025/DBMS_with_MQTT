@@ -72,6 +72,17 @@ void MqttHandler::message_arrived(mqtt::const_message_ptr msg) {
         json payload = json::parse(msg->get_payload_str());
         std::string log_code = payload.value("log_code", "");
 
+        // INF 로그 코드 처리 (통계 데이터)
+        if (log_code == "INF" && payload.contains("message") && payload.contains("time_range")) {
+            // 통계 데이터를 별도 컬렉션에 저장
+            auto db = mongo_client[config.mongo_db_name()];
+            db_manager.save_statistics_to_mongodb(db, device_id, payload);
+            
+            // 일반 로그로도 저장할지 결정 (선택사항)
+            // 현재는 통계 전용으로만 저장
+            return;
+        }
+
         // SHD/STR 처리 (shutdown 상태 확인보다 먼저)
         if (log_code == "SHD") {
             std::string msg_device_id = payload.value("message", "");
@@ -98,6 +109,13 @@ void MqttHandler::message_arrived(mqtt::const_message_ptr msg) {
             return;
         }
         std::string log_level = log_matches[2].str();
+
+        // request 토픽 처리 (통계 데이터 요청)
+        if (log_level == "request") {
+            std::string response_topic = "factory/" + device_id + "/log/response";
+            db_manager.process_statistics_data_request(mongo_client, mqtt_client, device_id, response_topic);
+            return;
+        }
 
         std::cout << "Message arrived on topic: " << topic_str << std::endl;
 

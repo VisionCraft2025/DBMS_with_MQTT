@@ -46,6 +46,7 @@ public:
     std::string mongo_db_name() const { return get("MONGO_DB_NAME", "factory_monitoring"); }
     std::string devices_collection() const { return get("DEVICES_COLLECTION", "devices"); }
     std::string all_logs_collection() const { return get("ALL_LOGS_COLLECTION", "logs_all"); }
+    std::string statistics_collection() const { return get("STATISTICS_COLLECTION", "statistics"); }
     
     std::string mqtt_client_id() const {
         return "factory_monitor_db_writer_" + 

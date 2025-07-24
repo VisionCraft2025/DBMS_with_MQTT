@@ -44,4 +44,15 @@ public:
                            const json& payload,
                            const std::string& topic,
                            const bsoncxx::document::view& device_info);
+    
+    // 통계 데이터 저장
+    void save_statistics_to_mongodb(mongocxx::database& db,
+                                   const std::string& device_id,
+                                   const json& payload);
+    
+    // 통계 데이터 조회
+    void process_statistics_data_request(mongocxx::client& mongo_client,
+                                       mqtt::async_client* mqtt_client,
+                                       const std::string& device_id,
+                                       const std::string& topic);
 };

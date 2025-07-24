@@ -518,3 +518,128 @@ void DatabaseManager::save_log_to_mongodb(mongocxx::database& db,
         std::cerr << "Error saving log to MongoDB: " << e.what() << std::endl;
     }
 }
+
+void DatabaseManager::save_statistics_to_mongodb(mongocxx::database& db,
+                                                const std::string& device_id,
+                                                const json& payload) {
+    try {
+        std::cout << "\n=========================" << std::endl;
+        std::cout << "Saving statistics data for device: " << device_id << std::endl;
+        
+        // 현재 시간 생성
+        auto now = std::chrono::system_clock::now();
+        auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        
+        // message 객체에서 통계 데이터 추출
+        json message = payload["message"];
+        json time_range = payload["time_range"];
+        
+        // BSON 문서 생성
+        bson_builder doc{};
+        doc << "_id" << generate_ulid()
+            << "device_id" << device_id
+            << "log_code" << payload.value("log_code", "")
+            << "statistics" << bsoncxx::builder::stream::open_document
+                << "total" << message.value("total", "")
+                << "pass" << message.value("pass", "")
+                << "fail" << message.value("fail", "")
+                << "failure" << message.value("failure", "")
+            << bsoncxx::builder::stream::close_document
+            << "time_range" << bsoncxx::builder::stream::open_document
+                << "start" << time_range.value("start", 0)
+                << "end" << time_range.value("end", 0)
+            << bsoncxx::builder::stream::close_document
+            << "created_at" << bsoncxx::types::b_date{std::chrono::milliseconds{timestamp}};
+        
+        auto doc_value = doc << finalize;
+        
+        // statistics 컬렉션에 저장
+        db[config.statistics_collection()].insert_one(doc_value.view());
+        
+        std::cout << "✓ Statistics saved to " << config.statistics_collection() << " collection" << std::endl;
+        std::cout << "  - Total: " << message.value("total", "") << std::endl;
+        std::cout << "  - Pass: " << message.value("pass", "") << std::endl;
+        std::cout << "  - Fail: " << message.value("fail", "") << std::endl;
+        std::cout << "  - Failure rate: " << message.value("failure", "") << std::endl;
+        std::cout << "=========================\n" << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Error saving statistics to MongoDB: " << e.what() << std::endl;
+    }
+}
+
+void DatabaseManager::process_statistics_data_request(mongocxx::client& mongo_client,
+                                                     mqtt::async_client* mqtt_client,
+                                                     const std::string& device_id,
+                                                     const std::string& response_topic) {
+    try {
+        std::cout << "\n=========================" << std::endl;
+        std::cout << "Processing statistics data request for device: " << device_id << std::endl;
+        
+        auto db = mongo_client[config.mongo_db_name()];
+        auto collection = db[config.statistics_collection()];
+        
+        // 해당 디바이스의 가장 최근 통계 데이터 조회
+        mongocxx::options::find opts{};
+        opts.sort(bsoncxx::builder::stream::document{} << "created_at" << -1 << finalize);
+        opts.limit(1);
+        
+        auto filter = bsoncxx::builder::stream::document{} 
+            << "device_id" << device_id 
+            << finalize;
+        
+        auto cursor = collection.find(filter.view(), opts);
+        
+        json response;
+        response["device_id"] = device_id;
+        response["status"] = "success";
+        
+        if (cursor.begin() != cursor.end()) {
+            auto doc = *cursor.begin();
+            
+            // BSON에서 JSON으로 변환
+            std::string bson_json = bsoncxx::to_json(doc);
+            json bson_data = json::parse(bson_json);
+            
+            // 응답 데이터 구성
+            response["data"] = {
+                {"log_code", bson_data["log_code"]},
+                {"message", bson_data["statistics"]},
+                {"time_range", bson_data["time_range"]}
+            };
+            
+            std::cout << "✓ Found statistics data for device: " << device_id << std::endl;
+        } else {
+            response["status"] = "not_found";
+            response["message"] = "No statistics data found for device: " + device_id;
+            std::cout << "✗ No statistics data found for device: " << device_id << std::endl;
+        }
+        
+        // MQTT로 응답 전송
+        if (mqtt_client) {
+            std::string response_str = response.dump();
+            auto msg = mqtt::make_message(response_topic, response_str);
+            msg->set_qos(1);
+            mqtt_client->publish(msg);
+            std::cout << "✓ Response sent to topic: " << response_topic << std::endl;
+        }
+        
+        std::cout << "=========================\n" << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Error processing statistics data request: " << e.what() << std::endl;
+        
+        // 에러 응답 전송
+        if (mqtt_client) {
+            json error_response;
+            error_response["device_id"] = device_id;
+            error_response["status"] = "error";
+            error_response["message"] = e.what();
+            
+            std::string response_str = error_response.dump();
+            auto msg = mqtt::make_message(response_topic, response_str);
+            msg->set_qos(1);
+            mqtt_client->publish(msg);
+        }
+    }
+}
