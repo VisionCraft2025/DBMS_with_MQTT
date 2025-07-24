@@ -45,7 +45,17 @@ void MqttHandler::message_arrived(mqtt::const_message_ptr msg) {
         // 통계 요청 처리
         if (topic_str == config.statistics_request_topic()) {
             json request = json::parse(msg->get_payload_str());
-            std::cout << "Processing statistics request for: " << request.value("device_id", "unknown") << std::endl;
+            
+            // 요청 ID가 없으면 생성
+            if (!request.contains("request_id")) {
+                auto now = std::chrono::system_clock::now();
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+                request["request_id"] = std::to_string(ms);
+            }
+            
+            std::cout << "Processing statistics request for: " << request.value("device_id", "unknown") 
+                      << " (ID: " << request["request_id"] << ")" << std::endl;
+            
             db_manager.process_statistics_request(mongo_client, mqtt_client, request);
             return;
         }

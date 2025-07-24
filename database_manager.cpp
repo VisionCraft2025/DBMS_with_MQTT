@@ -227,6 +227,20 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
         return;
     }
 
+    // 요청 ID 확인 (중복 요청 방지)
+    static std::string last_request_id = "";
+    std::string request_id = request.value("request_id", "");
+    
+    if (!request_id.empty() && request_id == last_request_id) {
+        std::cout << "Duplicate request detected (ID: " << request_id << "). Ignoring." << std::endl;
+        return;
+    }
+    
+    // 새 요청 ID 저장
+    if (!request_id.empty()) {
+        last_request_id = request_id;
+    }
+
     try {
         auto db = mongo_client[config.mongo_db_name()];
         auto collection = db[config.all_logs_collection()];
@@ -259,9 +273,38 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
                           << "$lte" << bsoncxx::types::b_int64{end_time}
                           << bsoncxx::builder::stream::close_document;
 
+            // 먼저 SPD 로그가 있는지 확인
+            auto count = collection.count_documents(filter_builder.view());
+            std::cout << "Found " << count << " SPD logs for device " << dev_id << std::endl;
+            
+            if (count == 0) {
+                std::cout << "No SPD logs found for device " << dev_id << ". Checking for any logs..." << std::endl;
+                
+                // 디바이스 자체가 존재하는지 확인
+                bson_builder device_filter;
+                device_filter << "device_id" << dev_id;
+                auto device_count = collection.count_documents(device_filter.view());
+                
+                if (device_count == 0) {
+                    std::cout << "No logs found for device " << dev_id << ". Device might not exist." << std::endl;
+                } else {
+                    std::cout << "Device " << dev_id << " exists with " << device_count << " logs, but no SPD logs." << std::endl;
+                }
+            }
+
             // 평균 속도 계산 (MongoDB Aggregation 사용)
             mongocxx::pipeline pipeline{};
             pipeline.match(filter_builder.view());
+            
+            // 메시지 필드 확인 (디버깅)
+            auto sample_doc = collection.find_one(filter_builder.view());
+            if (sample_doc) {
+                auto doc_view = sample_doc->view();
+                if (doc_view["message"]) {
+                    std::string message_str(doc_view["message"].get_string().value);
+                    std::cout << "Sample SPD message: '" << message_str << "'" << std::endl;
+                }
+            }
             
             // 숫자 형식의 메시지만 필터링 (정규식 사용)
             pipeline.match(bson_builder{} << "message" << bsoncxx::builder::stream::open_document
@@ -285,11 +328,19 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
             // 평균 속도 추출
             double average_speed = 0.0;
             auto cursor = collection.aggregate(pipeline);
+            bool has_results = false;
+            
             for (auto&& doc : cursor) {
+                has_results = true;
                 if (doc["average"] && doc["average"].type() == bsoncxx::type::k_double) {
                     average_speed = doc["average"].get_double();
+                    std::cout << "Calculated average speed: " << average_speed << std::endl;
                     break;
                 }
+            }
+            
+            if (!has_results) {
+                std::cout << "No valid numeric SPD logs found for average calculation" << std::endl;
             }
 
             // 현재 속도 조회 (최신 SPD 로그)
@@ -318,10 +369,13 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
                     if (doc_view["message"]) {
                         std::string message_str(doc_view["message"].get_string().value);
                         current_speed = std::stoi(message_str);
+                        std::cout << "Current speed from latest log: " << current_speed << std::endl;
                     }
                 } catch (const std::exception& e) {
                     std::cerr << "Error parsing current_speed: " << e.what() << std::endl;
                 }
+            } else {
+                std::cout << "No valid numeric SPD logs found for current speed" << std::endl;
             }
 
             // 응답 생성
@@ -329,6 +383,9 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
             response["device_id"] = dev_id;
             response["average"] = static_cast<int>(average_speed); // 정수로 변환
             response["current_speed"] = current_speed;
+            if (!request_id.empty()) {
+                response["request_id"] = request_id;
+            }
 
             // 응답 전송
             std::string response_topic = "factory/" + dev_id + "/msg/statistics";
@@ -340,13 +397,9 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
 
         // 디바이스 ID에 따라 처리
         if (device_id == "All") {
-            // 모든 디바이스 ID 조회 (숫자 형식의 메시지만 가진 디바이스)
+            // 모든 디바이스 ID 조회 (SPD 로그가 있는 디바이스)
             mongocxx::pipeline distinct_pipeline{};
-            distinct_pipeline.match(bson_builder{} << "log_code" << "SPD" 
-                                              << "message" << bsoncxx::builder::stream::open_document
-                                              << "$regex" << "^[0-9]+$"
-                                              << bsoncxx::builder::stream::close_document
-                                              << finalize);
+            distinct_pipeline.match(bson_builder{} << "log_code" << "SPD" << finalize);
             distinct_pipeline.group(bson_builder{} << "_id" << "$device_id" << finalize);
             
             auto distinct_cursor = collection.aggregate(distinct_pipeline);
@@ -374,6 +427,9 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
             json error_response;
             error_response["device_id"] = device_id;
             error_response["error"] = e.what();
+            if (!request_id.empty()) {
+                error_response["request_id"] = request_id;
+            }
             
             std::string response_topic = "factory/" + device_id + "/msg/statistics";
             std::string payload = error_response.dump();
