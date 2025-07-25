@@ -317,7 +317,13 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
                                              << "$toDouble" << "$message"
                                              << bsoncxx::builder::stream::close_document
                                              << finalize);
-            
+
+            // 0보다 큰 값만 필터링 (속도가 0인 경우 평균 계산에서 제외)
+            pipeline.match(bson_builder{} << "speed_value" << bsoncxx::builder::stream::open_document
+                                        << "$gt" << 0.0
+                                        << bsoncxx::builder::stream::close_document
+                                        << finalize);
+                                        
             // 평균 계산
             pipeline.group(bson_builder{} << "_id" << bsoncxx::types::b_null{}
                                         << "average" << bsoncxx::builder::stream::open_document
