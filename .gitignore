@@ -2,3 +2,5 @@
 *.backup
 check_data.js
 /build/*
+*.js
+*.py

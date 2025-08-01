@@ -264,21 +264,23 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
 
         // 통계 계산 및 응답 전송 함수
         auto calculate_and_publish = [&](const std::string& dev_id) {
-            // SPD 로그 필터링
+            // 디바이스 기반 로그 필터링 (숫자 메시지만)
             bson_builder filter_builder;
             filter_builder << "device_id" << dev_id
-                          << "log_code" << "SPD"
                           << "timestamp" << bsoncxx::builder::stream::open_document
                           << "$gte" << bsoncxx::types::b_int64{start_time}
                           << "$lte" << bsoncxx::types::b_int64{end_time}
+                          << bsoncxx::builder::stream::close_document
+                          << "message" << bsoncxx::builder::stream::open_document
+                          << "$regex" << "^[0-9]+$"
                           << bsoncxx::builder::stream::close_document;
 
-            // 먼저 SPD 로그가 있는지 확인
+            // 숫자 메시지 로그 개수 확인
             auto count = collection.count_documents(filter_builder.view());
-            std::cout << "Found " << count << " SPD logs for device " << dev_id << std::endl;
+            std::cout << "Found " << count << " numeric logs for device " << dev_id << std::endl;
             
             if (count == 0) {
-                std::cout << "No SPD logs found for device " << dev_id << ". Checking for any logs..." << std::endl;
+                std::cout << "No numeric logs found for device " << dev_id << ". Checking for any logs..." << std::endl;
                 
                 // 디바이스 자체가 존재하는지 확인
                 bson_builder device_filter;
@@ -288,7 +290,7 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
                 if (device_count == 0) {
                     std::cout << "No logs found for device " << dev_id << ". Device might not exist." << std::endl;
                 } else {
-                    std::cout << "Device " << dev_id << " exists with " << device_count << " logs, but no SPD logs." << std::endl;
+                    std::cout << "Device " << dev_id << " exists with " << device_count << " logs, but no numeric logs." << std::endl;
                 }
             }
 
@@ -302,15 +304,9 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
                 auto doc_view = sample_doc->view();
                 if (doc_view["message"]) {
                     std::string message_str(doc_view["message"].get_string().value);
-                    std::cout << "Sample SPD message: '" << message_str << "'" << std::endl;
+                    std::cout << "Sample numeric message: '" << message_str << "'" << std::endl;
                 }
             }
-            
-            // 숫자 형식의 메시지만 필터링 (정규식 사용)
-            pipeline.match(bson_builder{} << "message" << bsoncxx::builder::stream::open_document
-                                        << "$regex" << "^[0-9]+$"
-                                        << bsoncxx::builder::stream::close_document
-                                        << finalize);
             
             // 문자열을 숫자로 변환
             pipeline.add_fields(bson_builder{} << "speed_value" << bsoncxx::builder::stream::open_document
@@ -346,29 +342,16 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
             }
             
             if (!has_results) {
-                std::cout << "No valid numeric SPD logs found for average calculation" << std::endl;
+                std::cout << "No valid numeric logs found for average calculation" << std::endl;
             }
 
-            // 현재 속도 조회 (최신 SPD 로그)
+            // 현재 속도 조회 (최신 숫자 로그)
             int current_speed = 0;
             mongocxx::options::find opts{};
             opts.sort(bson_builder{} << "timestamp" << -1 << finalize); // 최신순 정렬
-            
-            // 숫자 형식의 메시지만 필터링 (새로운 필터 생성)
-            bson_builder number_filter;
-            number_filter << "device_id" << dev_id
-                         << "log_code" << "SPD"
-                         << "timestamp" << bsoncxx::builder::stream::open_document
-                         << "$gte" << bsoncxx::types::b_int64{start_time}
-                         << "$lte" << bsoncxx::types::b_int64{end_time}
-                         << bsoncxx::builder::stream::close_document
-                         << "message" << bsoncxx::builder::stream::open_document
-                         << "$regex" << "^[0-9]+$"
-                         << bsoncxx::builder::stream::close_document;
-            
             opts.limit(1); // 가장 최근 1개만
 
-            auto latest_doc = collection.find_one(number_filter.view(), opts);
+            auto latest_doc = collection.find_one(filter_builder.view(), opts);
             if (latest_doc) {
                 try {
                     auto doc_view = latest_doc->view();
@@ -381,7 +364,7 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
                     std::cerr << "Error parsing current_speed: " << e.what() << std::endl;
                 }
             } else {
-                std::cout << "No valid numeric SPD logs found for current speed" << std::endl;
+                std::cout << "No valid numeric logs found for current speed" << std::endl;
             }
 
             // 응답 생성
@@ -403,9 +386,12 @@ void DatabaseManager::process_statistics_request(mongocxx::client& mongo_client,
 
         // 디바이스 ID에 따라 처리
         if (device_id == "All") {
-            // 모든 디바이스 ID 조회 (SPD 로그가 있는 디바이스)
+            // 모든 디바이스 ID 조회 (숫자 메시지가 있는 디바이스)
             mongocxx::pipeline distinct_pipeline{};
-            distinct_pipeline.match(bson_builder{} << "log_code" << "SPD" << finalize);
+            distinct_pipeline.match(bson_builder{} << "message" << bsoncxx::builder::stream::open_document
+                                                 << "$regex" << "^[0-9]+$"
+                                                 << bsoncxx::builder::stream::close_document
+                                                 << finalize);
             distinct_pipeline.group(bson_builder{} << "_id" << "$device_id" << finalize);
             
             auto distinct_cursor = collection.aggregate(distinct_pipeline);
